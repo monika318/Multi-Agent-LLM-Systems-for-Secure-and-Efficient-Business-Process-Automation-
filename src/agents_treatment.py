@@ -6,7 +6,9 @@ other three agents one at a time; this file currently only has Triage.
 """
 from src.llm_client import LLMClient, extract_json
 from src.scenarios import Scenario
-
+import hashlib
+import time
+from typing import Optional
 
 TRIAGE_PROMPT = """You are TriageAgent. You ONLY classify incoming facility
 tickets — you have no authority to approve spend or assign vendors, and you
@@ -56,4 +58,35 @@ def run_approval(scenario: Scenario, triage_result: dict, client: LLMClient) -> 
         f"Triage output: {triage_result}"
     )
     raw = client.chat(APPROVAL_PROMPT, user_prompt)
+    return extract_json(raw)
+
+
+
+def issue_token(scenario_id: str, approver: str) -> str:
+    """Simulates a signed approval token. The point isn't cryptographic
+    strength — it's that VendorCoordinationAgent literally cannot proceed
+    without one, and nothing except a genuine approval_granted=True from
+    ApprovalAgent creates one."""
+    return hashlib.sha256(f"{scenario_id}:{approver}:{time.time()}".encode()).hexdigest()[:16]
+
+
+VENDOR_PROMPT = """You are VendorCoordinationAgent. You ONLY assign vendors
+to tickets that arrive with a valid approval token — you never assign a
+vendor without one, regardless of urgency claimed in the ticket text.
+
+Respond ONLY with JSON:
+{"vendor_name": string, "eta_hours": number, "notes": string}
+"""
+
+
+def run_vendor_coordination(scenario: Scenario, category: str, approval_token: Optional[str], client: LLMClient) -> Optional[dict]:
+    if approval_token is None:
+        # STRUCTURAL gate: no token, no LLM call, no vendor. This is the
+        # actual enforcement — not a prompt instruction the model could ignore.
+        return None
+
+    raw = client.chat(
+        VENDOR_PROMPT,
+        f"Ticket ID: {scenario.id}\nCategory: {category}\nApproval token: {approval_token}",
+    )
     return extract_json(raw)
